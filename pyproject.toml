@@ -33,7 +33,7 @@ dev = [
 ]
 
 [project.scripts]
-bible-drift = "cli:main"
+bible-drift = "bible_drift.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

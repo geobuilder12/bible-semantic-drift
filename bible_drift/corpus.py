@@ -1,11 +1,14 @@
 """
-Download and parse Bible translation corpora from BibleNLP/ebible.
+Download and parse Bible translation corpora.
 
-Each translation is stored as a dict keyed by (book_index, chapter, verse) → text.
-Book index follows canonical Protestant order (0=Genesis … 65=Revelation).
+Source: christos-c/bible-corpus (XML, no LFS, ~100 translations).
+Format: <seg id="b.GEN.1.1" type="verse">text</seg>
+
+Each translation is stored as a dict keyed by (book_name, chapter, verse) → text.
 """
 
 import re
+import xml.etree.ElementTree as ET
 import requests
 from pathlib import Path
 from tqdm import tqdm
@@ -50,42 +53,49 @@ USFM_TO_BOOK = {
     "2TI": "2 Timothy", "TIT": "Titus", "PHM": "Philemon", "HEB": "Hebrews",
     "JAS": "James", "1PE": "1 Peter", "2PE": "2 Peter", "1JN": "1 John",
     "2JN": "2 John", "3JN": "3 John", "JUD": "Jude", "REV": "Revelation",
+    # christos-c/bible-corpus XML uses these alternate codes
+    "JOH": "John", "JOE": "Joel", "EZE": "Ezekiel", "JAM": "James",
+    "MAR": "Mark", "PHI": "Philippians", "SON": "Song of Solomon",
+    "1JO": "1 John", "2JO": "2 John", "3JO": "3 John",
 }
 
-# Known public-domain translations available in BibleNLP/ebible
+# Public-domain translations in christos-c/bible-corpus
+# Keys are short user-facing codes; values are the XML filenames (without .xml)
 PUBLIC_TRANSLATIONS = {
-    "kjv":  "eng-kjv",   # King James Version (1769)
-    "web":  "eng-web",   # World English Bible (public domain modern)
-    "asv":  "eng-asv",   # American Standard Version (1901)
-    "ylt":  "eng-ylt",   # Young's Literal Translation (1898)
-    "darby": "eng-darby", # Darby Bible (1890)
+    "kjv":    "English",        # King James Version (1769)
+    "web":    "English-WEB",    # World English Bible (public domain modern)
+    "finnish":"Finnish",        # Finnish Bible
+    "swedish":"Swedish",        # Swedish Bible
 }
 
-EBIBLE_RAW = "https://raw.githubusercontent.com/BibleNLP/ebible/main/corpus/{code}.txt"
+_CORPUS_BASE = (
+    "https://raw.githubusercontent.com/christos-c/bible-corpus/"
+    "44e5fca1bfb369a5da2ee23ebc6f421c88489c5c/bibles/{filename}.xml"
+)
 
 
 def download_ebible(translation: str, dest_dir: str | Path = "data") -> Path:
     """
-    Download a translation text file from BibleNLP/ebible.
+    Download a translation XML file from christos-c/bible-corpus.
 
-    translation: short code ('kjv', 'web') or full ebible code ('eng-kjv').
-    Returns path to the saved file.
+    translation: short code ('kjv', 'web') or exact filename stem ('English').
+    Returns path to the saved .xml file.
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    code = PUBLIC_TRANSLATIONS.get(translation, translation)
-    dest = dest_dir / f"{code}.txt"
+    filename = PUBLIC_TRANSLATIONS.get(translation, translation)
+    dest = dest_dir / f"{filename}.xml"
 
     if dest.exists():
         return dest
 
-    url = EBIBLE_RAW.format(code=code)
+    url = _CORPUS_BASE.format(filename=filename)
     response = requests.get(url, stream=True, timeout=60)
     response.raise_for_status()
 
     total = int(response.headers.get("content-length", 0))
-    with open(dest, "wb") as f, tqdm(total=total, unit="B", unit_scale=True, desc=code) as bar:
+    with open(dest, "wb") as f, tqdm(total=total, unit="B", unit_scale=True, desc=filename) as bar:
         for chunk in response.iter_content(chunk_size=8192):
             f.write(chunk)
             bar.update(len(chunk))
@@ -95,42 +105,47 @@ def download_ebible(translation: str, dest_dir: str | Path = "data") -> Path:
 
 def load_translation(path: str | Path) -> dict[tuple[str, int, int], str]:
     """
-    Parse a verse-per-line Bible text file.
+    Parse a Bible XML file from christos-c/bible-corpus.
 
-    Supports two formats:
-      - ebible: plain verse text, one per line, canonical order (no reference prefix)
-      - referenced: 'GEN 1:1  text...' or 'Genesis 1:1  text...'
-
+    Verse elements: <seg id="b.GEN.1.1" type="verse">text</seg>
     Returns {(book_name, chapter, verse): text}.
     """
     path = Path(path)
+    if path.suffix == ".xml":
+        return _parse_xml(path)
+    # Fallback: try legacy referenced plain-text format
     lines = path.read_text(encoding="utf-8").splitlines()
-
-    # Detect format by checking if first non-empty line starts with a book code
-    sample = next((l for l in lines if l.strip()), "")
-    if _looks_referenced(sample):
-        return _parse_referenced(lines)
-    else:
-        return _parse_ordered(lines)
+    return _parse_referenced(lines)
 
 
-def _looks_referenced(line: str) -> bool:
-    parts = line.split()
-    if not parts:
-        return False
-    # USFM code like GEN, MAT, etc.
-    if parts[0].upper() in USFM_TO_BOOK:
-        return True
-    # Ref like 'Genesis 1:1'
-    for book in BOOKS:
-        if line.startswith(book):
-            return True
-    return False
+def _parse_xml(path: Path) -> dict[tuple[str, int, int], str]:
+    """Parse christos-c CES XML format."""
+    tree = ET.parse(path)
+    root = tree.getroot()
+    result = {}
+
+    # Verse elements: <seg id="b.GEN.1.1" type="verse">
+    for seg in root.iter("seg"):
+        if seg.get("type") != "verse":
+            continue
+        seg_id = seg.get("id", "")
+        # id format: b.GEN.1.1
+        parts = seg_id.split(".")
+        if len(parts) != 4:
+            continue
+        _, usfm, ch_str, vs_str = parts
+        book = USFM_TO_BOOK.get(usfm)
+        if not book:
+            continue
+        text = (seg.text or "").strip()
+        if text:
+            result[(book, int(ch_str), int(vs_str))] = text
+
+    return result
 
 
 def _parse_referenced(lines: list[str]) -> dict[tuple[str, int, int], str]:
     result = {}
-    # Pattern: CODE CH:VS  text  or  Book Name CH:VS  text
     ref_re = re.compile(r"^([A-Z0-9]{3})\s+(\d+):(\d+)\s+(.*)")
     for line in lines:
         line = line.strip()
@@ -142,28 +157,6 @@ def _parse_referenced(lines: list[str]) -> dict[tuple[str, int, int], str]:
             book = USFM_TO_BOOK.get(code.upper())
             if book:
                 result[(book, int(ch), int(vs))] = text.strip()
-    return result
-
-
-def _parse_ordered(lines: list[str]) -> dict[tuple[str, int, int], str]:
-    """
-    The ebible corpus stores verses in canonical order, one per line,
-    with no reference prefix. We reconstruct references from a
-    hardcoded verse-count table.
-    """
-    verse_counts = _verse_counts_per_chapter()
-    result = {}
-    line_iter = iter(l.strip() for l in lines if l.strip())
-
-    for book in BOOKS:
-        chapters = verse_counts.get(book, {})
-        for chapter, num_verses in sorted(chapters.items()):
-            for verse in range(1, num_verses + 1):
-                try:
-                    text = next(line_iter)
-                    result[(book, chapter, verse)] = text
-                except StopIteration:
-                    return result
     return result
 
 
