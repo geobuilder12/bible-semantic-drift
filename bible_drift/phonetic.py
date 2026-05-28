@@ -37,7 +37,7 @@ def metaphone_distance(word_a: str, word_b: str) -> float:
 
 
 def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-zA-Z]+", text.lower())
+    return re.findall(r"[a-zA-Z]+", text.lower())  # phonetic stays ASCII-only (English only)
 
 
 def verse_phonetic_drift(verse_a: str, verse_b: str) -> float | None:

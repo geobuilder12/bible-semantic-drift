@@ -175,7 +175,8 @@ def all_sentences(translation: dict) -> list[list[str]]:
 
 
 def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-zA-Z']+", text.lower())
+    # Unicode-aware: captures Latin, Greek, Hebrew, and other scripts
+    return re.findall(r"[\w']+", text.lower(), flags=re.UNICODE)
 
 
 def _verse_counts_per_chapter() -> dict[str, dict[int, int]]:
