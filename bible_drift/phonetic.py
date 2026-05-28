@@ -71,7 +71,7 @@ def compute_phonetic_drift(
 
     for book in target_books:
         shared_keys = sorted(
-            k for k in translation_a if k[0] == book and k in translation_b,
+            (k for k in translation_a if k[0] == book and k in translation_b),
             key=lambda k: (k[1], k[2]),
         )
         for key in shared_keys:
